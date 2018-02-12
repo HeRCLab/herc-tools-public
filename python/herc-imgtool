@@ -378,6 +378,10 @@ def main():
 
         exit(0)
 
+    if (not args.output) or (not args.input):
+        sys.stderr.write("ERROR: --input and --output must be specified.\n")
+        exit(1)
+
     # infer input and output format if required
     if args.input_format == "auto":
         args.input_format = infer_format(args.input)
