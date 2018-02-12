@@ -1,0 +1,423 @@
+#!/usr/bin/env python3
+
+# .SCRIPTDOC
+
+descr = """
+
+# Image processing utilities for the University of South Carolina Heterogeneous
+# and Reconfigurable Computing (HeRC) research group. In particular, this tool
+# is used for converting images to and from formats suitable for use with
+# various embedded systems and FPGA platforms.
+
+"""
+descr = descr.replace("# ", " ")
+
+# .DESCRIPTION
+
+# Keep in mind that this script is not a tool for producing high-quality
+# production images. It may introduce artifact ING in some cases. Reading an
+# image as a JPEG and saving it as a JPEG will not necessarily produce a
+# bit-for-bit copy of that image. If you want high quality image manipulation
+# of standardized formats, you should instead use ``convert`` from ImageMagic.
+
+# Supported Image Formats
+# -----------------------
+
+# The following standard image formats are supported:
+#
+# * ``jpeg``
+# * ``png``
+# * ``bmp`` (24-bit color bitmap)
+
+# The remainder of this section documents non-standard image formats which
+# are also supported.
+
+# Altera DE2 RAW Image (``de2raw``)
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+# This image format stores a contiguous sequence of 1-byte color channel
+# values, organized into tuples comprising the RGB color channel of each pixel
+# consecutively, such that each group of 24 bits specifies the color value
+# for one single pixel.
+
+# The ``de2raw`` format includes a header which contains the following fields:
+
+# * Magic string [4 bytes] - the ASCII characters 'HeRC', hexadecimal
+#   ``0x48655243``
+# * Width in pixels [2 bytes] - unsigned int specifying image width.
+# * Height in pixels [2 bytes] - unsigned int specifying image height.
+# * Reserved [8 bytes] - reserved for future use, should be zeroed.
+
+# This image format is used on the Altera DE2-115 development board to load
+# images for further processing. Note that this is not an Altera format, it is
+# simply convenient for use with Altera's tooling. To that end, this image
+# format may in fact be useful for other purposes, but it's primary purpose is
+# to support the DE2 development board, in particular in the context of the
+# University of South Carolina CSCE313 course.
+
+# In particular, it is intended for this format to be convenient to utilize
+# with C program, as it can be indexed directly as an array, being careful to
+# start indexing at byte 16 (i.e. the first 16 bytes are ignored, so that the
+# header is not treated as data).
+
+# herc-imtool In-Memory Format (``hercimf``)
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+# This format is simply the in-memory image format for this program. It's
+# on-disk representation is simply a pickled copy of the data structure which
+# holds the image in memory. This is generally not useful except for debugging
+# this program. Note that this format is not guaranteed to be stable - it
+# should not be used for archival.
+
+# The data structure itself is a dict with the following keys:
+
+# * ``width`` - integer number of horizontal pixels
+# * ``height`` - integer number of vertical pixels
+# * ``version`` - the version string for the herc-imgtool which generated
+#   this image.
+# * ``pixels`` - numpy 2-dimensional array of pixel color values in RGB color.
+#   I believe this is technically a 3-dimensional array in-memory, since color
+#   channels can be accessed via an additional level of subscription.
+
+# Note that the hercimf on-disk format is bz2 compressed before writing, to
+# save space.
+
+# .SYNTAX
+
+# Run this script with the ``--help`` parameter for usage information.
+
+# .AUTHOR
+
+# Charles Daniels
+
+
+# .LICENSE
+
+# Copyright 2018 Charles Daniels
+
+#  Redistribution and use in source and binary forms, with or without
+#  modification, are permitted provided that the following conditions are met:
+
+#  1. Redistributions of source code must retain the above copyright notice,
+#  this list of conditions and the following disclaimer.
+
+#  2. Redistributions in binary form must reproduce the above copyright notice,
+#  this list of conditions and the following disclaimer in the documentation
+#  and/or other materials provided with the distribution.
+
+#  3. Neither the name of the copyright holder nor the names of its
+#  contributors may be used to endorse or promote products derived from this
+#  software without specific prior written permission.
+
+#  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+#  AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+#  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+#  ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+#  LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+#  CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+#  SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+#  INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+#  CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+#  ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+#  POSSIBILITY OF SUCH DAMAGE.
+
+# .CHANGELOG
+#
+# * 0.0.1
+#
+#   + 2018-02-12 - Charles Daniels
+#
+#       - Initial version.
+
+# .ENDOC
+
+
+herc_imgtool_version = "0.0.1"
+
+import os
+import sys
+import argparse
+import numpy
+import pickle
+from PIL import Image
+import bz2
+
+def load_hercimf(path):
+    im = None
+    with open(path, 'rb') as f:
+        im = f.read()
+    im = bz2.decompress(im)
+    im = pickle.loads(im)
+    # saity check that the values we expect are here
+    for k in ["width", "height", "version", "pixels"]:
+        assert k in im
+    return im
+
+def store_hercimf(im, path):
+    data = pickle.dumps(im)
+    data = bz2.compress(data)
+    with open(path, 'wb') as f:
+        f.write(data)
+
+def load_from_PIL(path):
+    pil_image = Image.open(path)
+
+    # ensure the image is in the RGB colorspace
+    pil_image = pil_image.convert("RGB")
+
+    # convert pixel data to a matrix
+    pixels = numpy.array(pil_image)
+    width, height = pil_image.size
+
+    # populate hercimf data structure
+    im = { "width": width, "height": height, "version": herc_imgtool_version,
+           "pixels": pixels}
+    return im
+
+def store_with_PIL(im, path, fmt, **kwargs):
+    pil_image = Image.fromarray(im["pixels"])
+    pil_image.save(path, format=fmt, **kwargs)
+
+def store_jpeg(im, path):
+    store_with_PIL(im, path, "jpeg", quality=90)
+
+def store_png(im, path):
+    store_with_PIL(im, path, "png")
+
+def store_bmp(im, path):
+    store_with_PIL(im, path, "bmp")
+
+def load_de2raw(path):
+    data = None
+    with open(path, 'rb') as f:
+        data = f.read()
+
+    # unpack data into memory for processing
+    sys.stderr.write("INFO: Loading de2raw image from '{}'...\n".format(path))
+    header = data[0:16]
+    raw_pixels = data[16:]
+    magic = header[0:4]
+    width = int.from_bytes(header[4:6], byteorder="big")
+    height = int.from_bytes(header[6:8], byteorder="big")
+    sys.stderr.write("INFO: magic: {} width: {} height: {}\n"
+                     .format(magic, width, height))
+
+    # populate pixels array
+    pixels = numpy.empty(shape = (height, width, 3), dtype=numpy.uint8)
+    pixel_counter = 0
+    length = width * height * 3
+    col = 0
+    row = 0
+
+    for i in range(length):
+        pixels[row][col][pixel_counter] = raw_pixels[i]
+
+        # update subscripts
+        pixel_counter += 1
+        if pixel_counter > 2:
+            pixel_counter = 0
+            col += 1
+            if col >= width:
+                col = 0
+                row += 1
+
+
+    return { "width": width, "height": height, "version": herc_imgtool_version,
+           "pixels": pixels}
+
+def store_de2raw(im, path):
+    with open(path, 'wb') as f:
+        # write header
+        f.write(b'HeRC')
+        f.write(im["width"].to_bytes(2, 'big'))
+        f.write(im["height"].to_bytes(2, 'big'))
+        f.write((0).to_bytes(8, 'big'))
+
+        # write data
+        for row in range(len(im["pixels"])):
+            for col in range(len(im["pixels"][row])):
+                for channel in range(len(im["pixels"][row][col])):
+                    elem = int(im["pixels"][row][col][channel])
+                    f.write(elem.to_bytes(1, 'big'))
+
+def parse_size(size):
+    try:
+        size = [int(x) for x in size.split('x')]
+        width = size[0]
+        height = size[1]
+        return (width, height)
+    except Exception:
+        sys.stderr.write("ERROR: Failed to parse WxH size '{}'\n".format(size))
+        raise ValueError
+
+
+def resize_image(im, size):
+    """resize_image
+
+    Resize an image to the specified size. Size should be a string in WxH
+    format, and is parsed by parse_size().
+
+    Note that aspect ratio of the source image is not preserved.
+
+    :param im: hercimf format image
+    :param size: size in WxH format, as a string
+    """
+
+    width, height = parse_size(size)
+
+    pil_image = Image.fromarray(im["pixels"])
+    pil_image = pil_image.resize((width, height), Image.ANTIALIAS)
+    pil_image = pil_image.convert("RGB")
+
+    pixels = numpy.array(pil_image)
+    width, height = pil_image.size
+    return { "width": width, "height": height, "version": herc_imgtool_version,
+           "pixels": pixels}
+
+def infer_format(s):
+    """infer_format
+
+    Given some string, guess the image format if possible. For example,
+    given s = "foo.jpeg", this function would return "jpeg".
+
+    :param s:
+    """
+
+    s = s.lower().strip()
+    if s.endswith("jpeg"):
+        return "jpeg"
+    elif s.endswith("jpg"):
+        return "jpeg"
+    elif s.endswith("png"):
+        return "png"
+    elif s.endswith("bmp"):
+        return "bmp"
+    elif s.endswith("hercimf"):
+        return "hercimf"
+    elif s.endswith("de2raw"):
+        return "de2raw"
+    else:
+        return None
+
+# The conversion matrix associates an image format with a dict which has the
+# keys load and store. The values of these keys should be functions.  The load
+# function should accept a path on disk, and return the image in herc-imgtool's
+# in-memory format. The store function accepts as it's only arguments an image
+# in herc-imgtool's in-memory format and a path on disk, to which the image is
+# written.
+
+conversion_matrix = {}
+conversion_matrix["jpg"] = {"load": load_from_PIL, "store": store_jpeg}
+conversion_matrix["jpeg"] = conversion_matrix["jpg"]
+conversion_matrix["hercimf"] = {"load": load_hercimf, "store": store_hercimf}
+conversion_matrix["png"] = {"load": load_from_PIL, "store": store_png}
+conversion_matrix["bmp"] = {"load": load_from_PIL, "store": store_bmp}
+conversion_matrix["de2raw"] = {"load": load_de2raw, "store": store_de2raw}
+
+def main():
+
+    parser = argparse.ArgumentParser(description=descr)
+
+    parser.add_argument("--version", "-v", action="version",
+                        version="%(prog)s " + herc_imgtool_version)
+
+    parser.add_argument("--input", "-i", default=None,
+                        help="Input image to process.")
+
+    parser.add_argument("--output", "-o", default=None,
+                        help="Output path to write result to.")
+
+    parser.add_argument("--resize", "-r", default=None,
+                        help="Re-scale the image to the specified size. Use" +
+                        " the format WxH. (default: do not resize)")
+
+    parser.add_argument("--input_resolution", "-n", default="auto",
+                        help="Specify input resolution in the format WxH. " +
+                        "This is only used for image formats which do not " +
+                        "store their resolution in a header, such as de2raw." +
+                        " (default: auto)")
+
+    parser.add_argument("--input_format", "-f", default="auto",
+                        help="Specify format for input image. " +
+                        "(default: auto)")
+
+    parser.add_argument("--output_format", "-u", default="auto",
+                        help="Specify format for output image. " +
+                        "(default: auto)")
+
+    parser.add_argument("--list_formats", "-l", action="store_true",
+                        default=False, help="Print supported image formats" +
+                        " then exit.")
+
+    args = parser.parse_args()
+
+    # list formats and exit
+    if args.list_formats:
+        for fmt in conversion_matrix:
+            c = conversion_matrix[fmt]
+            rw = "NOT IMPLEMENTED"
+            if (c["load"] is None) and (c["store"] is not None):
+                rw = "WRITE ONLY"
+            elif (c["load"] is not None) and (c["store"] is None):
+                rw = "READ ONLY"
+            elif (c["load"] is not None) and (c["store"] is not None):
+                rw = "READ + WRITE"
+            print("{:20} {}".format(fmt, rw))
+
+        exit(0)
+
+    # infer input and output format if required
+    if args.input_format == "auto":
+        args.input_format = infer_format(args.input)
+        if args.input_format is None:
+            sys.stderr.write("ERROR: could not infer format from '{}'\n"
+                             .format(args.input))
+            exit(1)
+        else:
+            sys.stderr.write("INFO: inferred format '{}' from '{}'\n"
+                             .format(args.input_format, args.input))
+
+    if args.output_format == "auto":
+        args.output_format = infer_format(args.output)
+        if args.output_format is None:
+            sys.stderr.write("ERROR: could not infer format from '{}'\n"
+                             .format(args.output))
+            exit(1)
+        else:
+            sys.stderr.write("INFO: inferred format '{}' from '{}'\n"
+                             .format(args.output_format, args.output))
+
+    # make sure input and output were specified
+    if args.input is None:
+        sys.systderr.write("ERROR: no input file specified\n")
+        exit(1)
+    if args.output is None:
+        sys.systderr.write("ERROR: no output file specified\n")
+        exit(1)
+
+
+    # select the appropriate load and store functions from the conversion
+    # matrix
+    load_func = conversion_matrix[args.input_format]["load"]
+    store_func = conversion_matrix[args.output_format]["store"]
+    if load_func is None:
+        sys.stderr.write("ERROR: no load function for format '{}'\n"
+                         .format(args.input_format))
+        exit(1)
+    if store_func is None:
+        sys.stderr.write("ERROR: no store function for format '{}'\n"
+                         .format(args.output_format))
+        exit(1)
+
+    working_image = conversion_matrix[args.input_format]["load"](args.input)
+
+    # perform the resize operation, if requested
+    if args.resize is not None:
+        sys.stderr.write("INFO: resizing image to '{}'...\n"
+                         .format(args.resize))
+        working_image = resize_image(working_image, args.resize)
+
+    conversion_matrix[args.output_format]["store"](working_image, args.output)
+
+if __name__ == "__main__":
+    main()
