@@ -187,6 +187,9 @@ def store_png(im, path):
 def store_bmp(im, path):
     store_with_PIL(im, path, "bmp")
 
+def store_ppm(im, path):
+    store_with_PIL(im, path, "ppm")
+
 def load_de2raw(path):
     data = None
     with open(path, 'rb') as f:
@@ -201,6 +204,12 @@ def load_de2raw(path):
     height = int.from_bytes(header[6:8], byteorder="big")
     sys.stderr.write("INFO: magic: {} width: {} height: {}\n"
                      .format(magic, width, height))
+
+    # validate the magic string
+    if magic != b'HeRC':
+        sys.stderr.write("ERROR: incorrect magic! got '{}' expected '{}'\n"
+                         .format(magic, b'HeRC'))
+        raise ValueError
 
     # populate pixels array
     pixels = numpy.empty(shape = (height, width, 3), dtype=numpy.uint8)
@@ -296,6 +305,8 @@ def infer_format(s):
         return "hercimf"
     elif s.endswith("de2raw"):
         return "de2raw"
+    elif s.endswith("ppm"):
+        return "ppm"
     else:
         return None
 
@@ -312,6 +323,7 @@ conversion_matrix["jpeg"] = conversion_matrix["jpg"]
 conversion_matrix["hercimf"] = {"load": load_hercimf, "store": store_hercimf}
 conversion_matrix["png"] = {"load": load_from_PIL, "store": store_png}
 conversion_matrix["bmp"] = {"load": load_from_PIL, "store": store_bmp}
+conversion_matrix["ppm"] = {"load": load_from_PIL, "store": store_ppm}
 conversion_matrix["de2raw"] = {"load": load_de2raw, "store": store_de2raw}
 
 def main():
