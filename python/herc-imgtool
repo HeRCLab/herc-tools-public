@@ -32,8 +32,8 @@ descr = descr.replace("# ", " ")
 # The remainder of this section documents non-standard image formats which
 # are also supported.
 
-# Altera DE2 RAW Image (``de2raw``)
-# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# Altera DE2 RAW Image With Header (``de2rawh``)
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 # This image format stores a contiguous sequence of 1-byte color channel
 # values, organized into tuples comprising the RGB color channel of each pixel
@@ -59,6 +59,14 @@ descr = descr.replace("# ", " ")
 # with C program, as it can be indexed directly as an array, being careful to
 # start indexing at byte 16 (i.e. the first 16 bytes are ignored, so that the
 # header is not treated as data).
+
+# Altera DE2 RAW Image Without Header (``de2raw``)
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+# This is exactly identical to de2rawh, but sans the 16 byte header. The
+# resolution is assumed to be 320x240 exactly. If the image is not resided
+# to this resolution, the script will crash. This format is intended for
+# teaching purposes only.
 
 # herc-imtool In-Memory Format (``hercimf``)
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -190,18 +198,35 @@ def store_bmp(im, path):
 def store_ppm(im, path):
     store_with_PIL(im, path, "ppm")
 
-def load_de2raw(path):
+def load_de2rawh(path):
+    return load_de2raw(path, useheader=True)
+
+def load_de2raw(path, useheader=False):
     data = None
     with open(path, 'rb') as f:
         data = f.read()
 
     # unpack data into memory for processing
     sys.stderr.write("INFO: Loading de2raw image from '{}'...\n".format(path))
-    header = data[0:16]
-    raw_pixels = data[16:]
-    magic = header[0:4]
-    width = int.from_bytes(header[4:6], byteorder="big")
-    height = int.from_bytes(header[6:8], byteorder="big")
+
+    # handle useheader
+    header = None
+    raw_pixels = None
+    magic = None
+    width = None
+    height = None
+    if useheader:
+        header = data[0:16]
+        raw_pixels = data[16:]
+        magic = header[0:4]
+        width = int.from_bytes(header[4:6], byteorder="big")
+        height = int.from_bytes(header[6:8], byteorder="big")
+    else:
+        raw_pixels = data
+        magic = b'HeRC'
+        height = 240
+        width = 320
+
     sys.stderr.write("INFO: magic: {} width: {} height: {}\n"
                      .format(magic, width, height))
 
@@ -234,13 +259,25 @@ def load_de2raw(path):
     return { "width": width, "height": height, "version": herc_imgtool_version,
            "pixels": pixels}
 
-def store_de2raw(im, path):
+def store_de2rawh(im, path):
+        return store_de2raw(im, path, useheader=True)
+
+def store_de2raw(im, path, useheader=False):
     with open(path, 'wb') as f:
-        # write header
-        f.write(b'HeRC')
-        f.write(im["width"].to_bytes(2, 'big'))
-        f.write(im["height"].to_bytes(2, 'big'))
-        f.write((0).to_bytes(8, 'big'))
+        if useheader:
+            # write header, if enabled
+            f.write(b'HeRC')
+            f.write(im["width"].to_bytes(2, 'big'))
+            f.write(im["height"].to_bytes(2, 'big'))
+            f.write((0).to_bytes(8, 'big'))
+        else:
+            # if we are running sans header, assert that the resolution is
+            # 320x240
+
+            if (im["height"] != 240) or (im["width"] != 320):
+                sys.stderr.write("ERROR: using format de2raw, but resolution" +
+                                 " is not 320x240. Try using --resize.\n")
+                exit(1)
 
         # write data
         for row in range(len(im["pixels"])):
@@ -305,6 +342,12 @@ def infer_format(s):
         return "hercimf"
     elif s.endswith("de2raw"):
         return "de2raw"
+    elif s.endswith("d2r"):
+        return "de2raw"
+    elif s.endswith("de2rawh"):
+        return "de2rawh"
+    elif s.endswith("d2h"):
+        return "de2rawh"
     elif s.endswith("ppm"):
         return "ppm"
     else:
@@ -325,6 +368,7 @@ conversion_matrix["png"] = {"load": load_from_PIL, "store": store_png}
 conversion_matrix["bmp"] = {"load": load_from_PIL, "store": store_bmp}
 conversion_matrix["ppm"] = {"load": load_from_PIL, "store": store_ppm}
 conversion_matrix["de2raw"] = {"load": load_de2raw, "store": store_de2raw}
+conversion_matrix["de2rawh"] = {"load": load_de2rawh, "store": store_de2rawh}
 
 def main():
 
@@ -425,14 +469,17 @@ def main():
                          .format(args.output_format))
         exit(1)
 
+    sys.stderr.write("INFO: loading image...\n")
     working_image = conversion_matrix[args.input_format]["load"](args.input)
 
+    sys.stderr.write("INFO: processing image...\n")
     # perform the resize operation, if requested
     if args.resize is not None:
         sys.stderr.write("INFO: resizing image to '{}'...\n"
                          .format(args.resize))
         working_image = resize_image(working_image, args.resize)
 
+    sys.stderr.write("INFO: saving output... \n")
     conversion_matrix[args.output_format]["store"](working_image, args.output)
 
 if __name__ == "__main__":
