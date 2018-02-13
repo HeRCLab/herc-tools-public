@@ -20,6 +20,16 @@ descr = descr.replace("# ", " ")
 # bit-for-bit copy of that image. If you want high quality image manipulation
 # of standardized formats, you should instead use ``convert`` from ImageMagic.
 
+# Dependencies
+# ------------
+#
+# To run this application, a Python 3 interpreter must be in ``$PATH`` and 
+# available via the name ``python3``. Additionally, the following Python 3
+# packages must be installed:
+#
+# * ``PIL``
+# * ``numpy``
+
 # Supported Image Formats
 # -----------------------
 
@@ -64,9 +74,10 @@ descr = descr.replace("# ", " ")
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 # This is exactly identical to de2rawh, but sans the 16 byte header. The
-# resolution is assumed to be 320x240 exactly. If the image is not resided
-# to this resolution, the script will crash. This format is intended for
-# teaching purposes only.
+# resolution is assumed to be 320x240 exactly. Note that if the image is not
+# already 320x240, it will be automatically resized as if you had passed the
+# options --resize 320x240 --bg_fill 0,0,0. For a non-default background color,
+# you must specify --resize and --bg_fill manually.
 
 # herc-imtool In-Memory Format (``hercimf``)
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -149,6 +160,7 @@ import numpy
 import pickle
 from PIL import Image
 import bz2
+import subprocess
 
 def load_hercimf(path):
     im = None
@@ -222,6 +234,8 @@ def load_de2raw(path, useheader=False):
         width = int.from_bytes(header[4:6], byteorder="big")
         height = int.from_bytes(header[6:8], byteorder="big")
     else:
+        sys.stderr.write("INFO: de2raw decoder is running in headerless " +
+                         "mode, header data will be faked\n")
         raw_pixels = data
         magic = b'HeRC'
         height = 240
@@ -243,8 +257,17 @@ def load_de2raw(path, useheader=False):
     col = 0
     row = 0
 
+    if len(raw_pixels) < length:
+        sys.stderr.write("WARN: expected at least length {} but got {}\n"
+                         .format(length, len(raw_pixels)))
+
+    errcount = 0
     for i in range(length):
-        pixels[row][col][pixel_counter] = raw_pixels[i]
+        try:
+            pixels[row][col][pixel_counter] = raw_pixels[i]
+        except Exception:
+            pixels[row][col][pixel_counter] = 0
+            errcount += 1
 
         # update subscripts
         pixel_counter += 1
@@ -254,6 +277,10 @@ def load_de2raw(path, useheader=False):
             if col >= width:
                 col = 0
                 row += 1
+
+    if errcount > 0:
+        sys.stderr.write("WARN: {} channels were missing, ".format(errcount) +
+                         "corrupted.\n")
 
 
     return { "width": width, "height": height, "version": herc_imgtool_version,
@@ -275,9 +302,10 @@ def store_de2raw(im, path, useheader=False):
             # 320x240
 
             if (im["height"] != 240) or (im["width"] != 320):
-                sys.stderr.write("ERROR: using format de2raw, but resolution" +
-                                 " is not 320x240. Try using --resize.\n")
-                exit(1)
+                sys.stderr.write("WARN: resolution '{}x{}' will be implicitly"
+                                 .format(im["width"], im["height"]) +
+                                 " resized to 320x240.\n")
+                im = resize_image(im, "320x240")
 
         # write data
         for row in range(len(im["pixels"])):
@@ -297,26 +325,44 @@ def parse_size(size):
         raise ValueError
 
 
-def resize_image(im, size):
+def resize_image(im, size, pad_color=(0, 0, 0), stretch=False):
     """resize_image
 
     Resize an image to the specified size. Size should be a string in WxH
     format, and is parsed by parse_size().
 
-    Note that aspect ratio of the source image is not preserved.
 
     :param im: hercimf format image
     :param size: size in WxH format, as a string
+    :pad_color: (R, G, B) tupe specifying bg fill color, if one is needed.
+    :stretch: if asserted, aspect ratio is not preserved and no letterboxing
+    occurs. Otherwise, aspect ratio is preserved, and image is letterboxed
+    to required dimensions using the specified fill color.
     """
 
     width, height = parse_size(size)
 
+    # convert to PIL image for resizing
     pil_image = Image.fromarray(im["pixels"])
-    pil_image = pil_image.resize((width, height), Image.ANTIALIAS)
+    pil_image.thumbnail((width, height), Image.ANTIALIAS)
     pil_image = pil_image.convert("RGB")
 
-    pixels = numpy.array(pil_image)
-    width, height = pil_image.size
+    pixels = None
+
+    if stretch:
+        # aspect ratio is not preserved
+         pixels = numpy.array(pil_image)
+    else:
+        # PIL will not automatically pad (letterbox) for us, so all we have is
+        # a guaranteed upper bound on the output image size.
+        bg = Image.new('RGB', (width, height), pad_color);
+        offset = ((bg.width - pil_image.width) // 2,
+                  (bg.height - pil_image.height) // 2)
+        bg.paste(pil_image, offset)
+
+        # generate pixels
+        pixels = numpy.array(bg)
+
     return { "width": width, "height": height, "version": herc_imgtool_version,
            "pixels": pixels}
 
@@ -353,6 +399,22 @@ def infer_format(s):
     else:
         return None
 
+def parse_RGB(s):
+    """parse_RGB
+
+    Parse a string of the form R,G,B into a color tuple of ints.
+
+    :param s:
+    """
+    try:
+        R, G, B = [numpy.uint8(x) for x in s.split(",")]
+    except Exception:
+        sys.stderr.write("ERROR: invalid RGB color tuple '{}'.\n".format(s))
+        raise ValueError
+
+    return (R, G, B)
+
+
 # The conversion matrix associates an image format with a dict which has the
 # keys load and store. The values of these keys should be functions.  The load
 # function should accept a path on disk, and return the image in herc-imgtool's
@@ -385,7 +447,21 @@ def main():
 
     parser.add_argument("--resize", "-r", default=None,
                         help="Re-scale the image to the specified size. Use" +
-                        " the format WxH. (default: do not resize)")
+                        " the format WxH. Aspect ratio is preserved, and " +
+                        "the image is letterboxed using the bg_fill color." +
+                        " (default: do not resize)")
+
+    parser.add_argument("--stretch", "-s", default=None,
+                        help="Re-scape the image as with --resize, but " +
+                        "stretch the image to fit the desired resolution, " +
+                        "rather than preserving aspect ratio. This option " +
+                        "has no effect when combined with --resize." +
+                        " (default: do not stretch)")
+
+    parser.add_argument("--bg_fill", "-g", default="0,0,0",
+                        help="RGB color tuple of the form R,B,G. This color " +
+                        "is used for any padding or background which needs " +
+                        "to be generated. (default: 0,0,0)")
 
     parser.add_argument("--input_resolution", "-n", default="auto",
                         help="Specify input resolution in the format WxH. " +
@@ -404,6 +480,11 @@ def main():
     parser.add_argument("--list_formats", "-l", action="store_true",
                         default=False, help="Print supported image formats" +
                         " then exit.")
+
+    parser.add_argument("--pack2zipfs", "-z", action="store_true",
+                        default=False, help="Assert to pack the output " +
+                        "file into an uncompress zip file suitable for use " +
+                        "with Altera zipfs.")
 
     args = parser.parse_args()
 
@@ -425,6 +506,9 @@ def main():
     if (not args.output) or (not args.input):
         sys.stderr.write("ERROR: --input and --output must be specified.\n")
         exit(1)
+
+    # parse the BG fill color
+    args.bg_fill = parse_RGB(args.bg_fill)
 
     # infer input and output format if required
     if args.input_format == "auto":
@@ -477,10 +561,32 @@ def main():
     if args.resize is not None:
         sys.stderr.write("INFO: resizing image to '{}'...\n"
                          .format(args.resize))
-        working_image = resize_image(working_image, args.resize)
+        working_image = resize_image(working_image,
+                                     args.resize,
+                                     args.bg_fill,
+                                     stretch=False)
+    if args.stretch is not None:
+        # because this executes after letterbox resize, this has no effect
+        # if the letterbox resize option is selected.
+        sys.stderr.write("INFO: resizing image to '{}'...\n"
+                         .format(args.resize))
+        working_image = resize_image(working_image,
+                                     args.resize,
+                                     args.bg_fill,
+                                     stretch=True)
 
     sys.stderr.write("INFO: saving output... \n")
     conversion_matrix[args.output_format]["store"](working_image, args.output)
+
+    if args.pack2zipfs:
+        sys.stderr.write("INFO: packing zipfs file... \n")
+        zip_name = args.output + ".zip"
+        if '.' in args.output:
+            zip_name = '.'.join(args.output.split('.')[:-1]) + ".zip"
+        subprocess.check_output(["zip", "-0", zip_name, args.output])
+        sys.stderr.write("INFO: zip file packed to '{}'\n".format(zip_name))
+
+
 
 if __name__ == "__main__":
     main()
