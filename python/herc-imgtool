@@ -15,7 +15,7 @@ descr = descr.replace("# ", " ")
 # .DESCRIPTION
 
 # Keep in mind that this script is not a tool for producing high-quality
-# production images. It may introduce artifact ING in some cases. Reading an
+# production images. It may introduce artifacting in some cases. Reading an
 # image as a JPEG and saving it as a JPEG will not necessarily produce a
 # bit-for-bit copy of that image. If you want high quality image manipulation
 # of standardized formats, you should instead use ``convert`` from ImageMagic.
@@ -23,7 +23,7 @@ descr = descr.replace("# ", " ")
 # Dependencies
 # ------------
 #
-# To run this application, a Python 3 interpreter must be in ``$PATH`` and 
+# To run this application, a Python 3 interpreter must be in ``$PATH`` and
 # available via the name ``python3``. Additionally, the following Python 3
 # packages must be installed:
 #
@@ -37,10 +37,17 @@ descr = descr.replace("# ", " ")
 #
 # * ``jpeg``
 # * ``png``
+# * ``ppm``
 # * ``bmp`` (24-bit color bitmap)
 
 # The remainder of this section documents non-standard image formats which
 # are also supported.
+
+# **NOTE**: To view a current listing of available image formats, as well as
+# implementation status, please use the ``--list`` flag. The output from this
+# option is generated directly from the ``herc-imtool`` image conversion
+# matrix, and should always reflect what your copy of the tool is actually
+# capable of.
 
 # Altera DE2 RAW Image With Header (``de2rawh``)
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -69,6 +76,13 @@ descr = descr.replace("# ", " ")
 # with C program, as it can be indexed directly as an array, being careful to
 # start indexing at byte 16 (i.e. the first 16 bytes are ignored, so that the
 # header is not treated as data).
+#
+# By convention, images in the ``de2rawh`` format use one of the following
+# two file extensions: ``.de2rawh``, or ``.d2h``.
+#
+# **NOTE**: You can also has ``herc-imgtool`` pack your ``de2rawh`` file into a
+# zip file suitable for use with Altera zipfs. This is accomplished by
+# providing the ``--pack2zipfs`` flag.
 
 # Altera DE2 RAW Image Without Header (``de2raw``)
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -76,11 +90,23 @@ descr = descr.replace("# ", " ")
 # This is exactly identical to de2rawh, but sans the 16 byte header. The
 # resolution is assumed to be 320x240 exactly. Note that if the image is not
 # already 320x240, it will be automatically resized as if you had passed the
-# options --resize 320x240 --bg_fill 0,0,0. For a non-default background color,
-# you must specify --resize and --bg_fill manually.
+# options ``--resize 320x240 --bg_fill 0,0,0``. For a non-default background
+# color, you must specify -``-resize`` and ``--bg_fill`` manually.
 
-# herc-imtool In-Memory Format (``hercimf``)
-# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# By convention, images in the ``de2raw`` format use one of the following two
+# file extensions: ``.de2raw``, ``.dat``, or ``.d2r``. Note that the ``.dat``
+# file extension is actually associated (see ``infer_format()``) with the
+# ``de2raw`` format, meaning using ``.dat`` as a file extension for input or
+# output implies that that file should be treated as a ``de2raw`` file.
+# To override this behaviour, use ``--input_format``.
+
+# **NOTE**: You can also has ``herc-imgtool`` pack your ``de2raw`` file into a
+# zip file suitable for use with Altera zipfs. This is accomplished by
+# providing the ``--pack2zipfs`` flag.
+
+
+# ``herc-imgtool`` In-Memory Format (``hercimf``)
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 # This format is simply the in-memory image format for this program. It's
 # on-disk representation is simply a pickled copy of the data structure which
@@ -100,6 +126,54 @@ descr = descr.replace("# ", " ")
 
 # Note that the hercimf on-disk format is bz2 compressed before writing, to
 # save space.
+
+# ``herc-imgtool`` Architecture Overview
+# --------------------------------------
+
+# ``herc-imgtool`` utilizes a 4-stage image processing pipeline, which is
+# orchestrated by the ``main()`` function. The stages of the pipeline are:
+
+# 1. **image load** - the input image is loaded into the in-memory format
+#    for further processing. In the case of ``hercimf`` image, this simply
+#    involves unpickling the object. For other formats, dedicated
+#    conversion functions are utilized.
+
+# 2. **image manipulation** - any image manipulations specified by the user are
+#    executed sequentially in a pre-defined order. At present, the only
+#    available manipulations are ``--resize`` and ``--stretch``. In the future,
+#    more manipulations (i.e. channel masking) may be added. The order in which
+#    manipulations run is not user-configurable.
+
+# 3. **image store** - the finalized image is written to disk in the desired
+#    format. For ``hercimf`` images, this simply involves pickling the object
+#    and writing it out. For other images, dedicated conversion functions
+#    are utilized.
+
+# 4. **post processing** - in some cases, it may be desirable to post-process
+#    the generated output file using a script of some kind. For example, the
+#    ``--pack2zipfs`` flag causes a ``zip`` command to be run on the generated
+#    output file to pack a zip file suitable for use with Altera zipfs. At
+#    present, this is the only post-processing step available, but others
+#    may be added in the future. Post-processing steps are executed
+#    sequentially, in a non-user-configurable order.
+
+# Of particular note, stages 1 and 3 utilize the somewhat novel *conversion
+# matrix* this construct is a hashtable of hashtables. The outer key is a
+# format (i.e. ``png``). The inner key is either ``load`` or ``store``.  The
+# value associated with the inner key is always a function object (function
+# pointer in C parlance). Every such function must conform to the same calling
+# conventions, and must be pure with respect to the overall application state
+# (which resides in ``main()``. The conversion matrix saves considerable time
+# and complexity as compared to a case statement or a long ``if/elif/else``
+# block. It is also useful, because individual formats may support read-only,
+# write-only, or read-write access, all of which can be encoded trivially in
+# the conversion matrix.
+
+# Stage 2 is relatively uninteresting, and roughly consists of executing a
+# number of pure functions against the working state of the image in memory.
+
+# Stage 4 is equally uninteresting, and generally consists of conditionally
+# executing shell commands, with appropriate glue.
 
 # .SYNTAX
 
@@ -146,7 +220,15 @@ descr = descr.replace("# ", " ")
 #
 #   + 2018-02-12 - Charles Daniels
 #
-#       - Initial version.
+#       - Initial version with the following features:
+#
+#           * Letterbox and stretch resizing, with arbitrary BG fill color.
+#
+#           * Read and write support for jpeg, png, bmp, ppm, de2raw, de2rawh,
+#             and hercimf format image files.
+#
+#           * Automatic packing of Altera zipfs-compatible zip files (via
+#             ``--pack2zipfs``).
 
 # .ENDOC
 
@@ -396,6 +478,8 @@ def infer_format(s):
         return "de2rawh"
     elif s.endswith("ppm"):
         return "ppm"
+    elif s.endswith("dat"):
+        return "de2raw"
     else:
         return None
 
@@ -463,12 +547,6 @@ def main():
                         "is used for any padding or background which needs " +
                         "to be generated. (default: 0,0,0)")
 
-    parser.add_argument("--input_resolution", "-n", default="auto",
-                        help="Specify input resolution in the format WxH. " +
-                        "This is only used for image formats which do not " +
-                        "store their resolution in a header, such as de2raw." +
-                        " (default: auto)")
-
     parser.add_argument("--input_format", "-f", default="auto",
                         help="Specify format for input image. " +
                         "(default: auto)")
@@ -483,7 +561,7 @@ def main():
 
     parser.add_argument("--pack2zipfs", "-z", action="store_true",
                         default=False, help="Assert to pack the output " +
-                        "file into an uncompress zip file suitable for use " +
+                        "file into an uncompressd zip file suitable for use " +
                         "with Altera zipfs.")
 
     args = parser.parse_args()
