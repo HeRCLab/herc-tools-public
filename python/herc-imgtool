@@ -57,7 +57,7 @@ descr = descr.replace("# ", " ")
 # consecutively, such that each group of 24 bits specifies the color value
 # for one single pixel.
 
-# The ``de2raw`` format includes a header which contains the following fields:
+# The ``de2rawh`` format includes a header which contains the following fields:
 
 # * Magic string [4 bytes] - the ASCII characters 'HeRC', hexadecimal
 #   ``0x48655243``
@@ -80,7 +80,7 @@ descr = descr.replace("# ", " ")
 # By convention, images in the ``de2rawh`` format use one of the following
 # two file extensions: ``.de2rawh``, or ``.d2h``.
 #
-# **NOTE**: You can also has ``herc-imgtool`` pack your ``de2rawh`` file into a
+# **NOTE**: You can also have ``herc-imgtool`` pack your ``de2rawh`` file into a
 # zip file suitable for use with Altera zipfs. This is accomplished by
 # providing the ``--pack2zipfs`` flag.
 
@@ -100,7 +100,7 @@ descr = descr.replace("# ", " ")
 # output implies that that file should be treated as a ``de2raw`` file.
 # To override this behaviour, use ``--input_format``.
 
-# **NOTE**: You can also has ``herc-imgtool`` pack your ``de2raw`` file into a
+# **NOTE**: You can also have ``herc-imgtool`` pack your ``de2raw`` file into a
 # zip file suitable for use with Altera zipfs. This is accomplished by
 # providing the ``--pack2zipfs`` flag.
 
