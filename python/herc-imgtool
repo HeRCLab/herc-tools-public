@@ -29,6 +29,7 @@ descr = descr.replace("# ", " ")
 #
 # * ``PIL``
 # * ``numpy``
+# * ``skimage`` (only for canny edge detection)
 
 # Supported Image Formats
 # -----------------------
@@ -55,7 +56,9 @@ descr = descr.replace("# ", " ")
 # This image format stores a contiguous sequence of 1-byte color channel
 # values, organized into tuples comprising the RGB color channel of each pixel
 # consecutively, such that each group of 24 bits specifies the color value
-# for one single pixel.
+# for one single pixel. Note that this is only the case for the default format,
+# and some variants (such as feature flag 1). Some feature flags (i.e. 2) use
+# a diffrent format. See below for details.
 
 # The ``de2rawh`` format includes a header which contains the following fields:
 
@@ -63,7 +66,20 @@ descr = descr.replace("# ", " ")
 #   ``0x48655243``
 # * Width in pixels [2 bytes] - unsigned int specifying image width.
 # * Height in pixels [2 bytes] - unsigned int specifying image height.
-# * Reserved [8 bytes] - reserved for future use, should be zeroed.
+# * Feature flags [1 byte] - see below for values.
+# * Reserved [7 bytes] - reserved for future use, should be zeroed.
+
+# The following feature flags are available:
+
+# * 0b'00000000 - Image is an 8 bit-per-channel RGB color image.
+# * 0b'00000001 - Image is greyscale and stored in RGB format with the R
+#   channel containing greyscale color values and the G and B channels
+#   containing undefined values.
+# * 0b'00000010 - Image is a pixmap - each bit in the image corresponds to one
+#   pixel which is either 1 or 0. In this way the (y * width + x)th bit in the
+#   image is 1 if the pixel x, y is on, and 0 otherwise. This format was
+#   specifically added to support loading canny-edge-detection processed images
+#   into C programs.
 
 # This image format is used on the Altera DE2-115 development board to load
 # images for further processing. Note that this is not an Altera format, it is
@@ -123,6 +139,12 @@ descr = descr.replace("# ", " ")
 # * ``pixels`` - numpy 2-dimensional array of pixel color values in RGB color.
 #   I believe this is technically a 3-dimensional array in-memory, since color
 #   channels can be accessed via an additional level of subscription.
+# * ``greyscale`` - boolean, if true, then the red channel is intended to be
+#   treated as greyscale color values, and the G and B color channels are
+#   to be ignored. The ``pixels`` array retains the same format.
+# * ``pixmap`` - boolean, if true, ``greyscale`` is ignored, and the image is
+#   assumed to be a 1-bit-per-pixel image. The red channel is used to store
+#   the 1s or 0s (as 8 bit ints) while the G and B channels are ignored.
 
 # Note that the hercimf on-disk format is bz2 compressed before writing, to
 # save space.
@@ -133,29 +155,28 @@ descr = descr.replace("# ", " ")
 # ``herc-imgtool`` utilizes a 4-stage image processing pipeline, which is
 # orchestrated by the ``main()`` function. The stages of the pipeline are:
 
-# 1. **image load** - the input image is loaded into the in-memory format
-#    for further processing. In the case of ``hercimf`` image, this simply
-#    involves unpickling the object. For other formats, dedicated
-#    conversion functions are utilized.
+# 1. **image load** - the input image is loaded into the in-memory format for
+# further processing. In the case of ``hercimf`` image, this simply involves
+# unpickling the object. For other formats, dedicated conversion functions are
+# utilized.
 
 # 2. **image manipulation** - any image manipulations specified by the user are
-#    executed sequentially in a pre-defined order. At present, the only
-#    available manipulations are ``--resize`` and ``--stretch``. In the future,
-#    more manipulations (i.e. channel masking) may be added. The order in which
-#    manipulations run is not user-configurable.
+# executed sequentially in a pre-defined order.  For example ``--resize`` and
+# ``--stretch``. In the future, more manipulations (i.e. channel masking) may
+# be added. The order in which manipulations run is not user-configurable.
 
 # 3. **image store** - the finalized image is written to disk in the desired
-#    format. For ``hercimf`` images, this simply involves pickling the object
-#    and writing it out. For other images, dedicated conversion functions
-#    are utilized.
+# format. For ``hercimf`` images, this simply involves pickling the object and
+# writing it out. For other images, dedicated conversion functions are
+# utilized.
 
 # 4. **post processing** - in some cases, it may be desirable to post-process
-#    the generated output file using a script of some kind. For example, the
-#    ``--pack2zipfs`` flag causes a ``zip`` command to be run on the generated
-#    output file to pack a zip file suitable for use with Altera zipfs. At
-#    present, this is the only post-processing step available, but others
-#    may be added in the future. Post-processing steps are executed
-#    sequentially, in a non-user-configurable order.
+# the generated output file using a script of some kind. For example, the
+# ``--pack2zipfs`` flag causes a ``zip`` command to be run on the generated
+# output file to pack a zip file suitable for use with Altera zipfs. At
+# present, this is the only post-processing step available, but others may be
+# added in the future. Post-processing steps are executed sequentially, in a
+# non-user-configurable order.
 
 # Of particular note, stages 1 and 3 utilize the somewhat novel *conversion
 # matrix* this construct is a hashtable of hashtables. The outer key is a
@@ -229,6 +250,15 @@ descr = descr.replace("# ", " ")
 #
 #           * Automatic packing of Altera zipfs-compatible zip files (via
 #             ``--pack2zipfs``).
+#
+# * 0.0.2
+#   + 2018-02-19 - Charles Daniels
+#       - Added --canny
+#       - Added --canny_sigma
+#       - Added --greyscale option
+#       - Added --threshold option
+#       - de2h image format now uses byte 9 of the header for feature flags.
+
 
 # .ENDOC
 
@@ -273,11 +303,22 @@ def load_from_PIL(path):
 
     # populate hercimf data structure
     im = { "width": width, "height": height, "version": herc_imgtool_version,
-           "pixels": pixels}
+            "pixels": pixels, "greyscale": False, "pixmap": False}
     return im
 
 def store_with_PIL(im, path, fmt, **kwargs):
-    pil_image = Image.fromarray(im["pixels"])
+    pil_image = None
+    if im["pixmap"]:
+        im = pixmap2greyscale(im)
+
+    if im["greyscale"]:
+        pil_image = Image.fromarray(extract_greyscale(im))
+        pil_image = pil_image.convert("L")
+    else:
+        pil_image = Image.fromarray(im["pixels"])
+        pil_image = pil_image.convert("RGB")
+
+    pil_image = pil_image.convert("RGB")
     pil_image.save(path, format=fmt, **kwargs)
 
 def store_jpeg(im, path):
@@ -309,12 +350,26 @@ def load_de2raw(path, useheader=False):
     magic = None
     width = None
     height = None
+    feature_flag = None
+    greyscale = False
+    pixmap = False
     if useheader:
         header = data[0:16]
         raw_pixels = data[16:]
         magic = header[0:4]
         width = int.from_bytes(header[4:6], byteorder="big")
         height = int.from_bytes(header[6:8], byteorder="big")
+        feature_flag = int.from_bytes(header[9], byteorder="big")
+        if feature_flag == 0:
+            greyscale = False
+        elif feature_flag == 1:
+            greyscale = True
+        elif feature_flag == 2:
+            greyscale = True
+            pximap = True
+        else:
+            sys.stderr.write("INFO: unrecognized feature flag value: {}\n"
+                             .format(feature_flag))
     else:
         sys.stderr.write("INFO: de2raw decoder is running in headerless " +
                          "mode, header data will be faked\n")
@@ -322,9 +377,12 @@ def load_de2raw(path, useheader=False):
         magic = b'HeRC'
         height = 240
         width = 320
+        feature_flag = 0
+        greyscale = False
+        pixmap = False
 
-    sys.stderr.write("INFO: magic: {} width: {} height: {}\n"
-                     .format(magic, width, height))
+    sys.stderr.write("INFO: magic: {} width: {} height: {} feature: {}\n"
+                     .format(magic, width, height, feature_flag))
 
     # validate the magic string
     if magic != b'HeRC':
@@ -366,7 +424,7 @@ def load_de2raw(path, useheader=False):
 
 
     return { "width": width, "height": height, "version": herc_imgtool_version,
-           "pixels": pixels}
+            "pixels": pixels, "greyscale" : greyscale, "pixmap": pixmap}
 
 def store_de2rawh(im, path):
         return store_de2raw(im, path, useheader=True)
@@ -378,7 +436,13 @@ def store_de2raw(im, path, useheader=False):
             f.write(b'HeRC')
             f.write(im["width"].to_bytes(2, 'big'))
             f.write(im["height"].to_bytes(2, 'big'))
-            f.write((0).to_bytes(8, 'big'))
+            if im["pixmap"]:
+                f.write((2).to_bytes(1, 'big'))
+            elif im["greyscale"]:
+                f.write((1).to_bytes(1, 'big'))
+            else:
+                f.write((0).to_bytes(1, 'big'))
+            f.write((0).to_bytes(7, 'big'))
         else:
             # if we are running sans header, assert that the resolution is
             # 320x240
@@ -446,7 +510,160 @@ def resize_image(im, size, pad_color=(0, 0, 0), stretch=False):
         pixels = numpy.array(bg)
 
     return { "width": width, "height": height, "version": herc_imgtool_version,
-           "pixels": pixels}
+            "pixels": pixels, "greyscale":im["greyscale"],
+            "pixmap": im["pixmap"]}
+
+def to_greyscale(im):
+    pil_image = Image.fromarray(im["pixels"])
+    pil_image = pil_image.convert('L')
+    greyscale_pixels =  numpy.array(pil_image)
+    for x in range(im["width"]):
+        for y in range(im["height"]):
+            im["pixels"][y][x][0] = greyscale_pixels[y][x]
+            im["pixels"][y][x][1] = 0
+            im["pixels"][y][x][2] = 0
+
+    im["greyscale"] = True
+    return im
+
+def threshold(im, threshold_val="1,1,1"):
+    """threshold
+
+    Convert the image to 1-bit-per-pixel, stored in the red channel. All pixels
+    which exceed the given threshold are passed through, and the rest are
+    zeroed.  If the image is greyscale, then only the R channel of the
+    threshold is used.
+
+    :param im:
+    :param threshold_val: RGB color tuple - if all of the input color channels
+    for
+    a pixel are >= the channel in this tuple, it is passed through.
+    """
+
+    if im["pixmap"]:
+        # It is meaningless to threshold a pixmap.
+        return im
+
+    threshold_val = parse_RGB(threshold_val)
+    tr, tg, tb = threshold_val
+    for x in range(im["width"]):
+        for y in range(im["height"]):
+            r, g, b = im["pixels"][y][x]
+            if im["greyscale"]:
+                # for greyscale images, we only want to consider the red
+                # channel.
+                g, b = (255, 255)
+            if (r >= tr) and (g >= tg) and (b >= tb):
+                im["pixels"][y][x][0] = 0;
+                im["pixels"][y][x][1] = 0;
+                im["pixels"][y][x][2] = 0;
+
+    return im
+
+def to_pixmap(im):
+    """to_pixmap
+
+    Convers the image to a boolean array. All pixel values which are 0 are
+    output as 0, and all others are 1. The pixmap is stored in the R channel
+    and the G and B channels are zeroed.
+
+    :param im:
+    """
+    for x in range(im["width"]):
+        for y in range(im["height"]):
+            r, g, b = im["pixels"][y][x]
+            if (r + g + b) > 0:
+                im["pixels"][y][x] = [1,0,0]
+            else:
+                im["pixels"][y][x] = [0,0,0]
+
+    im["pixmap"] = True
+    return im
+
+def pixmap2greyscale(im):
+    """pixmap2greyscale
+
+    Converts an image to greyscale with 1 being 255 and 0 being 0.
+
+    :param im:
+    """
+
+    if not im["pixmap"]:
+        im = to_pixmap(im)
+    for x in range(im["width"]):
+        for y in range(im["height"]):
+            r, g, b = im["pixels"][y][x]
+            if (r + g + b) > 0:
+                im["pixels"][y][x] = [255,0,0]
+            else:
+                im["pixels"][y][x] = [0,0,0]
+
+    im["pixmap"] = False
+    im["greyscale"] = True
+
+    return im
+
+def extract_pixmap(im):
+    """extract_pixmap
+
+    Extract and return 2-d array of bools representing image pixmap. If the
+    image is not a pixmap already, then it will be silently converted to one
+    with the threshold ``127,127,127``.
+
+    :param im:
+    """
+
+    if not im["pixmap"]:
+        im = to_pixmap(im)
+    pixmap = numpy.zeros(shape=(im["height"], im["width"]), dtype=bool)
+    for x in range(im["width"]):
+        for y in range(im["height"]):
+            r, g, b = im["pixels"][y][x]
+            pixmap[y][x] = (r > 0)
+
+    return pixmap
+
+
+
+def extract_greyscale(im):
+    """extract_greyscale
+
+    Return 2-d matrix of greyscale pixel values with the G and B channels
+    removed explicitly. If the image is not greyscale already, it is converted
+    to such.
+
+    :param im:
+    """
+
+    if not im["greyscale"]:
+        im = to_greyscale(im)
+
+    greyscale_pixels = numpy.zeros(shape=(im["height"], im["width"]))
+    for x in range(im["width"]):
+        for y in range(im["height"]):
+            greyscale_pixels[y][x] = im["pixels"][y][x][0]
+
+    return greyscale_pixels
+
+
+def canny_filter(im, sigma):
+    try:
+        import skimage.feature
+
+        greymap = extract_greyscale(im)
+        bitmap = skimage.feature.canny(greymap, sigma)
+        for x in range(len(bitmap)):
+            for y in range(len(bitmap[x])):
+                val = bitmap[x][y]
+                im['pixels'][x][y] = [val, 0, 0]
+
+        im["pixmap"] = True
+        return im
+
+    except ImportError:
+        sys.stderr.write("ERROR: could not import skimage.feature, is " +
+                         "scikit-image installed?")
+        exit(1)
 
 def infer_format(s):
     """infer_format
@@ -564,6 +781,27 @@ def main():
                         "file into an uncompressd zip file suitable for use " +
                         "with Altera zipfs.")
 
+    parser.add_argument("--canny", "-c", action="store_true", default=False,
+                        help="Apply a canny image filter, requires " +
+                        "scikit-image to be installed. Use --canny_sigma" +
+                        " to modify the value of sigma. Implies " +
+                        "--greyscale. This runs after --threshold.")
+
+    parser.add_argument("--canny_sigma", "-S", type=float, default=1.0,
+                        help="Specify value of sigma for canny image filter." +
+                        " (default: 1.0)")
+
+    parser.add_argument("--greyscale", "-G", default=False, action="store_true",
+                        help="Convert image to greyscale and store the " +
+                        "result in the red channel only.")
+
+    parser.add_argument("--threshold", "-T", default=None,
+                        help="Drop all pixels whose RGB color values are " +
+                        "less than the color values specified here. This " +
+                        "parameter takes an RGB color tuple of the form " +
+                        "R,G,B, for example 1,2,3. Runs after --greyscale.")
+
+
     args = parser.parse_args()
 
     # list formats and exit
@@ -652,6 +890,18 @@ def main():
                                      args.resize,
                                      args.bg_fill,
                                      stretch=True)
+
+    if args.greyscale:
+        sys.stderr.write("INFO: converting image to greyscale... \n")
+        working_image = to_greyscale(working_image)
+
+    if args.threshold is not None:
+        sys.stderr.write("INFO: thresholding image... \n")
+        working_image = threshold(working_image, args.threshold)
+
+    if args.canny:
+        sys.stderr.write("INFO: performing canny edge detection... \n")
+        working_image = canny_filter(working_image, args.canny_sigma)
 
     sys.stderr.write("INFO: saving output... \n")
     conversion_matrix[args.output_format]["store"](working_image, args.output)
