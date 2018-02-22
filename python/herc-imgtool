@@ -31,6 +31,31 @@ descr = descr.replace("# ", " ")
 # * ``numpy``
 # * ``skimage`` (only for canny edge detection)
 
+# HeRC Header Format (H2F)
+# ------------------------
+
+# For the purpose of code-sharing, a number of in-house HeRC formats use the
+# same header format, which is documented here. An H2F consists of 16 bytes
+# of data, organized into the following fields. Unless otherwise noted, all
+# integer fields are assumed to be unsigned, with large byte order.
+
+# * Magic string [4 bytes] - the ASCII characters 'HeRC', hexadecimal
+#   ``0x48655243``. This is used for validation.
+# * Width in pixels [2 bytes] - unsigned int specifying image width.
+# * Height in pixels [2 bytes] - unsigned int specifying image height.
+# * File Format [1 byte] - see below for values.
+# * Reserved [7 bytes] - reserved for future use, should be zeroed.
+
+# The file format field is used to specify which of the HeRC image formats is
+# in use. The following values are possible:
+
+# =====   ==========
+# Code    Format
+# =====   ==========
+# 0       ``de2rawh``
+# 1       ``hif8``
+# 2       ``hif1``
+
 # Supported Image Formats
 # -----------------------
 
@@ -60,26 +85,8 @@ descr = descr.replace("# ", " ")
 # and some variants (such as feature flag 1). Some feature flags (i.e. 2) use
 # a diffrent format. See below for details.
 
-# The ``de2rawh`` format includes a header which contains the following fields:
-
-# * Magic string [4 bytes] - the ASCII characters 'HeRC', hexadecimal
-#   ``0x48655243``
-# * Width in pixels [2 bytes] - unsigned int specifying image width.
-# * Height in pixels [2 bytes] - unsigned int specifying image height.
-# * Feature flags [1 byte] - see below for values.
-# * Reserved [7 bytes] - reserved for future use, should be zeroed.
-
-# The following feature flags are available:
-
-# * 0b'00000000 - Image is an 8 bit-per-channel RGB color image.
-# * 0b'00000001 - Image is greyscale and stored in RGB format with the R
-#   channel containing greyscale color values and the G and B channels
-#   containing undefined values.
-# * 0b'00000010 - Image is a pixmap - each bit in the image corresponds to one
-#   pixel which is either 1 or 0. In this way the (y * width + x)th bit in the
-#   image is 1 if the pixel x, y is on, and 0 otherwise. This format was
-#   specifically added to support loading canny-edge-detection processed images
-#   into C programs.
+# The ``de2rawh`` begins with a 16-byte H2F format header, and uses file format
+# code 0.
 
 # This image format is used on the Altera DE2-115 development board to load
 # images for further processing. Note that this is not an Altera format, it is
@@ -95,10 +102,31 @@ descr = descr.replace("# ", " ")
 #
 # By convention, images in the ``de2rawh`` format use one of the following
 # two file extensions: ``.de2rawh``, or ``.d2h``.
-#
-# **NOTE**: You can also have ``herc-imgtool`` pack your ``de2rawh`` file into a
-# zip file suitable for use with Altera zipfs. This is accomplished by
+
+# **NOTE**: You can also have ``herc-imgtool`` pack your ``de2rawh`` file into
+# a zip file suitable for use with Altera zipfs. This is accomplished by
 # providing the ``--pack2zipfs`` flag.
+
+# **NOTE**: The name of this image format is maintained for compatibility with
+# herc-imgtool 0.0.1. This format would be more accurately dubbed HIF24.
+
+# HeRC Image Format (HIF)
+# ~~~~~~~~~~~~~~~~~~~~~~~
+
+# HIF is actually a collection of different image formats. All HIF image
+# types store pixel data contiguously in row-major format, with big
+# byte-order.  HIF formats are suffixed with a number (i.e. ``hif8``), which is
+# the number of bits per pixel. In this way, ``hif1`` refers to a
+# 1-bit-per-pixel bitmap, ``hif8`` to a 1-byte-per-pixel greyscale image, and
+# ``hif24`` to a 3-byte-per-pixel RGB image (identical to ``de2rawh``).
+
+# All HIF types begin wtih a 16-byte H2F format header.
+
+# The following HIF formats are supported:
+#
+# * ``hif1``
+# * ``hif8``
+# * ``hif24`` (``de2rawh``)
 
 # Altera DE2 RAW Image Without Header (``de2raw``)
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -257,7 +285,15 @@ descr = descr.replace("# ", " ")
 #       - Added --canny_sigma
 #       - Added --greyscale option
 #       - Added --threshold option
-#       - de2h image format now uses byte 9 of the header for feature flags.
+#
+#   + 2018-02-20 - Charles Daniels
+#       - Specify H2F and HIF formats.
+#       - Added --display.
+#       - Implemented HIF8 support.
+#       - Added methods to handle generating and parsing H2F headers.
+#
+#   + 2018-02-22 - Charles Daniels
+#       - Added HIF1 support.
 
 
 # .ENDOC
@@ -336,13 +372,118 @@ def store_ppm(im, path):
 def load_de2rawh(path):
     return load_de2raw(path, useheader=True)
 
-def load_de2raw(path, useheader=False):
+def parse_h2f(data):
+    """parse_h2f
+
+    Extract h2f header data as a dict from raw bytes.
+
+    :param data:
+    """
+
+    header_data = {}
+
+    header = data[0:16]
+    magic = header[0:4]
+    width = header[4:6]
+    height = header[6:8]
+    format_code = header[9:10]
+
+    # cast back to int
+    width = int.from_bytes(width, byteorder="big")
+    height = int.from_bytes(height, byteorder="big")
+    format_code = int.from_bytes(format_code, byteorder="big")
+
+    # validate the magic string
+    if magic != b'HeRC':
+        sys.stderr.write("ERROR: incorrect magic! got '{}' expected '{}'\n"
+                         .format(magic, b'HeRC'))
+        raise ValueError
+
+    header_data["magic"] = magic
+    header_data["width"] = width
+    header_data["height"] = height
+    header_data["format_code"] = format_code
+
+    return header_data
+
+def make_h2f(width, height, format_code):
+    header = bytearray(bytes(16))
+    header[0:4] = b'HeRC'
+    header[4:6] = int(width).to_bytes(2, 'big')
+    header[6:8] = int(height).to_bytes(2, 'big')
+    header[9:10] = int(format_code).to_bytes(1, 'big')
+
+    assert(len(header) == 16)
+
+    return bytes(header)
+
+def load_hif8(path):
+    # unpack data into memory for processing
+    sys.stderr.write("INFO: Loading hif8 image from '{}'...\n".format(path))
+
     data = None
     with open(path, 'rb') as f:
         data = f.read()
 
+    if data is None:
+        sys.stderr.write("ERROR: no data read.\n")
+        exit(1)
+
+    greyscale = True
+    pixmap = False
+
+    raw_pixels = data[16:]
+    header = parse_h2f(data)
+    width = header["width"]
+    height = header["height"]
+
+    # populate pixels array
+    pixels = numpy.empty(shape = (height, width, 3), dtype=numpy.uint8)
+    length = width * height
+    col = 0
+    row = 0
+
+    if len(raw_pixels) < length:
+        sys.stderr.write("WARN: expected at least length {} but got {}\n"
+                         .format(length, len(raw_pixels)))
+
+    errcount = 0
+    for i in range(length):
+        try:
+            pixels[row][col][0] = raw_pixels[i]
+            pixels[row][col][1] = 0
+            pixels[row][col][2] = 0
+        except Exception:
+            pixels[row][col][0] = 0
+            pixels[row][col][1] = 0
+            pixels[row][col][2] = 0
+            errcount += 1
+
+        # update subscripts
+        col += 1
+        if col >= width:
+            col = 0
+            row += 1
+
+    if errcount > 0:
+        sys.stderr.write("WARN: {} pixels were missing, ".format(errcount) +
+                         "corrupted.\n")
+
+
+    return { "width": width, "height": height, "version": herc_imgtool_version,
+            "pixels": pixels, "greyscale" : greyscale, "pixmap": pixmap}
+
+def load_de2raw(path, useheader=False):
     # unpack data into memory for processing
     sys.stderr.write("INFO: Loading de2raw image from '{}'...\n".format(path))
+
+    data = None
+    with open(path, 'rb') as f:
+        data = f.read()
+
+    if data is None:
+        sys.stderr.write("ERROR: no data read.\n")
+        exit(1)
 
     # handle useheader
     header = None
@@ -350,26 +491,18 @@ def load_de2raw(path, useheader=False):
     magic = None
     width = None
     height = None
-    feature_flag = None
+
+    # these are always False for HIF24
     greyscale = False
     pixmap = False
+
     if useheader:
-        header = data[0:16]
+        header = parse_h2f(data)
         raw_pixels = data[16:]
-        magic = header[0:4]
-        width = int.from_bytes(header[4:6], byteorder="big")
-        height = int.from_bytes(header[6:8], byteorder="big")
-        feature_flag = int.from_bytes(header[9], byteorder="big")
-        if feature_flag == 0:
-            greyscale = False
-        elif feature_flag == 1:
-            greyscale = True
-        elif feature_flag == 2:
-            greyscale = True
-            pximap = True
-        else:
-            sys.stderr.write("INFO: unrecognized feature flag value: {}\n"
-                             .format(feature_flag))
+        width = header["width"]
+        height = header["height"]
+        format_code = header["format_code"]
+
     else:
         sys.stderr.write("INFO: de2raw decoder is running in headerless " +
                          "mode, header data will be faked\n")
@@ -377,18 +510,12 @@ def load_de2raw(path, useheader=False):
         magic = b'HeRC'
         height = 240
         width = 320
-        feature_flag = 0
-        greyscale = False
-        pixmap = False
+        format_code = 0
 
-    sys.stderr.write("INFO: magic: {} width: {} height: {} feature: {}\n"
-                     .format(magic, width, height, feature_flag))
-
-    # validate the magic string
-    if magic != b'HeRC':
-        sys.stderr.write("ERROR: incorrect magic! got '{}' expected '{}'\n"
-                         .format(magic, b'HeRC'))
-        raise ValueError
+    if format_code != 0:
+        sys.stderr.write("INFO: bad format code '{}' for HIF24.\n"
+                         .format(format_code))
+        exit(1)
 
     # populate pixels array
     pixels = numpy.empty(shape = (height, width, 3), dtype=numpy.uint8)
@@ -430,19 +557,11 @@ def store_de2rawh(im, path):
         return store_de2raw(im, path, useheader=True)
 
 def store_de2raw(im, path, useheader=False):
+    format_code = 0
     with open(path, 'wb') as f:
         if useheader:
             # write header, if enabled
-            f.write(b'HeRC')
-            f.write(im["width"].to_bytes(2, 'big'))
-            f.write(im["height"].to_bytes(2, 'big'))
-            if im["pixmap"]:
-                f.write((2).to_bytes(1, 'big'))
-            elif im["greyscale"]:
-                f.write((1).to_bytes(1, 'big'))
-            else:
-                f.write((0).to_bytes(1, 'big'))
-            f.write((0).to_bytes(7, 'big'))
+            f.write(make_h2f(im["width"], im["height"], format_code))
         else:
             # if we are running sans header, assert that the resolution is
             # 320x240
@@ -459,6 +578,138 @@ def store_de2raw(im, path, useheader=False):
                 for channel in range(len(im["pixels"][row][col])):
                     elem = int(im["pixels"][row][col][channel])
                     f.write(elem.to_bytes(1, 'big'))
+
+def store_hif8(im, path):
+    if not im["greyscale"]:
+        im = to_greyscale(im)
+
+    format_code = 1
+    with open(path, 'wb') as f:
+        f.write(make_h2f(im["width"], im["height"], format_code))
+
+        # write data
+        for row in range(len(im["pixels"])):
+            for col in range(len(im["pixels"][row])):
+                elem = int(im["pixels"][row][col][0])
+                f.write(elem.to_bytes(1, 'big'))
+
+def store_hif1(im, path):
+    if not im["pixmap"]:
+        im = to_pixmap(im)
+
+    pixmap = extract_pixmap(im)
+
+    format_code = 2
+    with open(path, 'wb') as f:
+        f.write(make_h2f(im["width"], im["height"], format_code))
+
+        # write data
+        bit_index = 0
+        current_byte = 0
+        for row in range(len(im["pixels"])):
+            for col in range(len(im["pixels"][row])):
+                elem = pixmap[row][col]
+                if elem:
+                    # this makes the bit-order what we would expect, so the
+                    # leftmost bit comes earlier in the image.
+                    current_byte += (1 << (7 - bit_index))
+
+                bit_index += 1
+                if bit_index > 7:
+                    f.write(current_byte.to_bytes(1, 'big'))
+                    current_byte = 0
+                    bit_index = 0
+
+        # pad out the end of the last byte with zeros
+        while (bit_index < 8) and (bit_index != 0):
+            current_byte += (1 << (bit_index))
+            bit_index += 1
+        f.write(current_byte.to_bytes(1, 'big'))
+
+def load_hif1(path):
+    # unpack data into memory for processing
+    sys.stderr.write("INFO: Loading hif1 image from '{}'...\n".format(path))
+
+    data = None
+    with open(path, 'rb') as f:
+        data = f.read()
+
+    if data is None:
+        sys.stderr.write("ERROR: no data read.\n")
+        exit(1)
+
+    greyscale = True
+    pixmap = True
+
+    raw_pixels = bytearray(data[16:])
+    header = parse_h2f(data)
+    width = header["width"]
+    height = header["height"]
+
+    if header["format_code"] != 2:
+        sys.stderr.write("ERROR: bad format code for HIF1: '{}'\n"
+                         .format(header["format_code"]))
+
+    # populate pixels array
+    pixels = numpy.empty(shape = (height, width, 3), dtype=numpy.uint8)
+    length = (width * height)
+    raw_length = len(raw_pixels)
+    col = 0
+    row = 0
+
+    if len(raw_pixels) * 8 < length:
+        sys.stderr.write("WARN: expected at least length {} but got {}\n"
+                         .format(length, len(raw_pixels)))
+
+    errcount = 0
+    bit_index = 0
+    for i in range(0, raw_length):
+        the_val = bytes(1)
+        try:
+            the_val = raw_pixels[i]
+        except Exception:
+            #  the_val = bytes(1)
+            the_val = 0
+            errcount += 1
+
+        # we convert the value into a binary string, because it makes it easy
+        # to query out certain bits by their subscripts.
+        assert(the_val < 256)
+        the_val = str(bin(the_val))[2:]
+        the_val = '0'*(8 - len(the_val)) + the_val
+        assert(len(the_val) == 8)
+
+        pixel = 0
+        for bit_index in range(0, 8):
+            pixel = int(the_val[bit_index], 2)
+
+            assert row < height
+            assert col < width
+
+            pixels[row][col][0] = pixel
+            pixels[row][col][1] = 0
+            pixels[row][col][2] = 0
+
+            # update subscripts
+            col += 1
+            if col >= width:
+                col = 0
+                row += 1
+                if row >= height:
+                    # we are just reading padding now
+                    break
+        if row >= height:
+            # break out of the outer loop also
+            break
+
+
+    if errcount > 0:
+        sys.stderr.write("WARN: {} pixels were missing, ".format(errcount) +
+                         "corrupted.\n")
+
+
+    return { "width": width, "height": height, "version": herc_imgtool_version,
+            "pixels": pixels, "greyscale" : greyscale, "pixmap": pixmap}
 
 def parse_size(size):
     try:
@@ -616,10 +867,10 @@ def extract_pixmap(im):
     if not im["pixmap"]:
         im = to_pixmap(im)
     pixmap = numpy.zeros(shape=(im["height"], im["width"]), dtype=bool)
-    for x in range(im["width"]):
-        for y in range(im["height"]):
-            r, g, b = im["pixels"][y][x]
-            pixmap[y][x] = (r > 0)
+    for col in range(im["width"]):
+        for row in range(im["height"]):
+            r, g, b = im["pixels"][row][col]
+            pixmap[row][col] = (r > 0)
 
     return pixmap
 
@@ -674,6 +925,9 @@ def infer_format(s):
     :param s:
     """
 
+    if s is None:
+        return "dummy"
+
     s = s.lower().strip()
     if s.endswith("jpeg"):
         return "jpeg"
@@ -697,6 +951,12 @@ def infer_format(s):
         return "ppm"
     elif s.endswith("dat"):
         return "de2raw"
+    elif s.endswith("hif24"):
+        return "de2rawh"
+    elif s.endswith("hif8"):
+        return "hif8"
+    elif s.endswith("hif1"):
+        return "hif1"
     else:
         return None
 
@@ -715,6 +975,25 @@ def parse_RGB(s):
 
     return (R, G, B)
 
+def display_image(im):
+
+    try:
+        import matplotlib.pyplot
+
+        if im["pixmap"]:
+            matplotlib.pyplot.imshow(extract_pixmap(im), cmap="gray")
+        elif im["greyscale"]:
+            matplotlib.pyplot.imshow(extract_greyscale(im), cmap="gray")
+        else:
+            matplotlib.pyplot.imshow(im["pixels"])
+
+        matplotlib.pyplot.show()
+
+    except ImportError:
+        sys.stderr.write("WARNING: cannot display image ,missing matplotlib.\n")
+
+def do_nothing(**kwargs):
+    pass
 
 # The conversion matrix associates an image format with a dict which has the
 # keys load and store. The values of these keys should be functions.  The load
@@ -732,6 +1011,9 @@ conversion_matrix["bmp"] = {"load": load_from_PIL, "store": store_bmp}
 conversion_matrix["ppm"] = {"load": load_from_PIL, "store": store_ppm}
 conversion_matrix["de2raw"] = {"load": load_de2raw, "store": store_de2raw}
 conversion_matrix["de2rawh"] = {"load": load_de2rawh, "store": store_de2rawh}
+conversion_matrix["hif8"] = {"load": load_hif8, "store": store_hif8}
+conversion_matrix["hif1"] = {"load": load_hif1, "store": store_hif1}
+conversion_matrix["dummy"] = {"load": do_nothing, "store": do_nothing}
 
 def main():
 
@@ -801,6 +1083,11 @@ def main():
                         "parameter takes an RGB color tuple of the form " +
                         "R,G,B, for example 1,2,3. Runs after --greyscale.")
 
+    parser.add_argument("--display", "-D", default=False, action="store_true",
+                        help="As an image processing step, display the " +
+                        "working state of the image after all other " +
+                        "image manipulation steps have finished.")
+
 
     args = parser.parse_args()
 
@@ -819,7 +1106,7 @@ def main():
 
         exit(0)
 
-    if (not args.output) or (not args.input):
+    if ((not args.output) or (not args.input)) and not args.display:
         sys.stderr.write("ERROR: --input and --output must be specified.\n")
         exit(1)
 
@@ -851,8 +1138,8 @@ def main():
     if args.input is None:
         sys.systderr.write("ERROR: no input file specified\n")
         exit(1)
-    if args.output is None:
-        sys.systderr.write("ERROR: no output file specified\n")
+    if (args.output is None) and not args.display:
+        sys.stderr.write("ERROR: no output file specified\n")
         exit(1)
 
 
@@ -870,7 +1157,8 @@ def main():
         exit(1)
 
     sys.stderr.write("INFO: loading image...\n")
-    working_image = conversion_matrix[args.input_format]["load"](args.input)
+    working_image = \
+            conversion_matrix[args.input_format]["load"](path=args.input)
 
     sys.stderr.write("INFO: processing image...\n")
     # perform the resize operation, if requested
@@ -903,8 +1191,13 @@ def main():
         sys.stderr.write("INFO: performing canny edge detection... \n")
         working_image = canny_filter(working_image, args.canny_sigma)
 
+    if args.display:
+        sys.stderr.write("INFO: displaying image... \n")
+        display_image(working_image)
+
     sys.stderr.write("INFO: saving output... \n")
-    conversion_matrix[args.output_format]["store"](working_image, args.output)
+    conversion_matrix[args.output_format]["store"](im=working_image,
+                                                   path=args.output)
 
     if args.pack2zipfs:
         sys.stderr.write("INFO: packing zipfs file... \n")
