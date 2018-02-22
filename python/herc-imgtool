@@ -294,12 +294,14 @@ descr = descr.replace("# ", " ")
 #
 #   + 2018-02-22 - Charles Daniels
 #       - Added HIF1 support.
+#
+# * 0.0.3
 
 
 # .ENDOC
 
 
-herc_imgtool_version = "0.0.2"
+herc_imgtool_version = "0.0.3-git"
 
 import os
 import sys
