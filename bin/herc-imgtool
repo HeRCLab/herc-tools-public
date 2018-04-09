@@ -992,7 +992,7 @@ def display_image(im):
         matplotlib.pyplot.show()
 
     except ImportError:
-        sys.stderr.write("WARNING: cannot display image ,missing matplotlib.\n")
+        sys.stderr.write("WARNING: cannot display image, missing matplotlib.\n")
 
 def do_nothing(**kwargs):
     pass
