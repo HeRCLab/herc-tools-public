@@ -1,7 +1,7 @@
 PREFIX=$(shell echo $$HOME)
 BIN_DIR=$(PREFIX)/bin
 
-INSTALL_TARGETS=$(shell ls ./bin/ | while read -r f ; do printf "$(BIN_DIR)/$$f" ; done)
+INSTALL_TARGETS=$(shell ls ./bin/ | while read -r f ; do printf "$(BIN_DIR)/$$f " ; done)
 
 info:
 	@echo "PREFIX: $(PREFIX)"
