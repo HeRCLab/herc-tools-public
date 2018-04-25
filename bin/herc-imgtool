@@ -55,6 +55,7 @@ descr = descr.replace("# ", " ")
 # 0       ``de2rawh``
 # 1       ``hif8``
 # 2       ``hif1``
+# =====   ==========
 
 # Supported Image Formats
 # -----------------------
@@ -280,19 +281,23 @@ descr = descr.replace("# ", " ")
 #             ``--pack2zipfs``).
 #
 # * 0.0.2
+#
 #   + 2018-02-19 - Charles Daniels
+#
 #       - Added --canny
 #       - Added --canny_sigma
 #       - Added --greyscale option
 #       - Added --threshold option
 #
 #   + 2018-02-20 - Charles Daniels
+#
 #       - Specify H2F and HIF formats.
 #       - Added --display.
 #       - Implemented HIF8 support.
 #       - Added methods to handle generating and parsing H2F headers.
 #
 #   + 2018-02-22 - Charles Daniels
+#
 #       - Added HIF1 support.
 #
 # * 0.0.3
