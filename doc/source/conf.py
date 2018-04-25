@@ -170,5 +170,6 @@ intersphinx_mapping = {'https://docs.python.org/': None}
 # If true, `todo` and `todoList` produce output, else they produce nothing.
 todo_include_todos = True
 
-import subprocess
-subprocess.call("../gen_script_doc.sh")
+def setup(app):
+    import subprocess
+    subprocess.call("./gen_script_doc.sh")
