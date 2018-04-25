@@ -3,3 +3,5 @@
 python/build
 python/dist
 python/*.spec
+doc/build/*
+doc/source/script/*
