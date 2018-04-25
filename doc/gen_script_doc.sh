@@ -12,6 +12,8 @@ else
 	SHELLDOC_CMD="$(which shelldoc)"
 fi
 
+mkdir -p ./doc/source/script
+
 for f in bin/* ; do
 	"$SHELLDOC_CMD" --titledepth 0 --input "$f" --prefix "./doc/source/script"
 done
