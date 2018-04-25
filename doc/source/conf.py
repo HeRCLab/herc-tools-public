@@ -172,7 +172,17 @@ todo_include_todos = True
 
 def setup(app):
     import subprocess
+    import os
 
+    script_name = "gen_script_doc.sh"
+    paths = ["./" + script_name, "../" + script_name, "../../" + script_name]
+
+    script_path = "error"
+    for p in paths:
+        if os.path.isfile(p):
+            script_path = p
+
+    print("selected script path: {}".format(script_path))
     print(subprocess.check_output("pwd").decode("utf-8"))
     print(subprocess.check_output("ls").decode("utf-8"))
-    print(subprocess.check_output("./gen_script_doc.sh").decode("utf-8"))
+    print(subprocess.check_output(script_path).decode("utf-8"))
