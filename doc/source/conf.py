@@ -172,4 +172,7 @@ todo_include_todos = True
 
 def setup(app):
     import subprocess
-    print(subprocess.check_output("./gen_script_doc.sh"))
+
+    print(subprocess.check_output("pwd").decode("utf-8"))
+    print(subprocess.check_output("ls").decode("utf-8"))
+    print(subprocess.check_output("./gen_script_doc.sh").decode("utf-8"))
