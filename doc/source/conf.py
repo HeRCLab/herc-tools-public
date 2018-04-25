@@ -172,4 +172,4 @@ todo_include_todos = True
 
 def setup(app):
     import subprocess
-    subprocess.call("./gen_script_doc.sh")
+    print(subprocess.check_output("./gen_script_doc.sh"))
