@@ -1,0 +1,380 @@
+#!/usr/bin/env python2
+
+# .SCRIPTDOC
+
+descr = """
+# A tool for interacting with Keyance Profilometry VK4 formatted data files,
+# built on top of Gwyddion's automation API. This tool is capable of importing
+# VK4 files, extracting the stored data, and producing both MATLAB matrices
+# containing the data and JSON formatted sidecar files containing metadata
+# about each.
+"""
+
+__description__ = descr.replace('# ', '')
+
+# .DESCRIPTION
+
+# Overview
+# --------
+
+# This tool was written to support analysis of VK4 formatted data files
+# programatically via existing tools such as MATLAB/Octave as well as any other
+# tool which is capable of importing MATLAB ``.mat`` format matrices (as well
+# as JSON, if metadata is required).
+
+# Gwyddion Paths
+# --------------
+
+# Throughout this document and the corresponding source code, the term
+# "Gwyddion Path" is used to refer to the notation which Gwyddion uses to refer
+# to data stored within the ``container`` object produced by loading a data
+# file. This is because a single container can store many pieces of data, such
+# as various matrices and metadata about them. Gwyddion paths roughly
+# correspond to POSIX paths in terms of notation. Typically, a single
+# fundamental unit of interest will be identified by the path ``/N``, where
+# ``N`` is a positive integer. Usually the data associated with this unit of
+# interest is located at ``/N/data``, and other metadata may be stored at other
+# paths relative to ``/N``. A Gwyddion path might identify a Gwyddion
+# ``DataField`` object, another Gwyddion container object, a string, or other
+# types of objects or data types.
+
+# Output Format
+# -------------
+
+# The raw data of the VK4 file which is input is converted into one or more
+# 2-dimensional matrices and stuffed into a single ``.mat`` data file for later
+# import into MATLAB (this is accomplished via ``scipy.io``). The matrix names
+# will be set to a prefix (by default ``matrix``, but this can be overridden
+# using a flag) followed by a ``_`` character and then the first part of the
+# key Gwyddion uses to refer to the matrix (this seems to typically be a
+# positive integer)
+
+# As much metadata as can be extracted from the VK4 file will also be extracted
+# and stored in a JSON file with the same basename as the generated ``.mat``
+# file.  This JSON file contains nested hash tables where the outer keys are
+# again the first part of the Gwyddion "path" to the relevant objects, and
+# the inner keys uniquely identify a metadata field. There are three types of
+# metadata fields which may be populated:
+
+# 1. Those obtained from ``/N/meta`` in the Gwyddion container produced from
+# the VK4 file. These fields each produce an inner key and a string value in
+# the JSON.
+
+# 2. Those obtained from member functions such as ``get_xres()`` of the
+# Gwyddion ``DataField`` object corresponding to ``/N``. These values are
+# stored in the format that they are returned by Gwyddion, and the field names
+# in the JSON file are simply the name of the function call with the ``get_``
+# removed (i.e. the output ``get_xres()`` is stored in the key ``xres``)
+
+# 3. Those obtained from Gwyddion fields which are of type ``str``, these are
+# stored as is and named after all parts of their Gwyddion path excepting the
+# first part. For example, ``/N/data/title`` from a Gwyddion container would
+# result in ``[N][data/title]`` containing the value of this field.
+
+# Additionally, for each matrix in the generated ``.mat``, a version of the raw
+# data which had a degree 2 polynomial regression subtracted from it (to
+# normalize uneven heights) will be stored with the matrix name
+# ``prefix_N_fit``. A third matrix will be created with the name
+# ``prefix_N_dim`` which will contain the x and y dimensions in meters as
+# floating point values in that order.
+
+# Footnote on the ``stats`` Field
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+# As a convenience feature, the output of ``.get_stats()`` is recorded for each
+# ``DataField`` object which is processed. The value of this field is a list of
+# floating point numbers, and it has the schema ``(avg, ra, rms, skew,
+# kurtosis)`` per the Gwyddion documentation.
+
+# Footnote on Loading JSON in MATLAB
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+# JSON was selected as the format for the metadata sidecar files because of the
+# fact that there is an existing, open-source JSON parser available for
+# MATLAB/Octave. In the form of JSONlab (https://github.com/fangq/jsonlab).
+
+# Caveats
+# -------
+
+# Gwyddion's internal data structures are not terribly well documented, and
+# this represents a best-effort attempt to rip Gwyddion objects from it's data
+# model and generalize them into a readily importable format. Some loss
+# is inevitable, and in particular it is not yet clear if all required metadata
+# is preserved by this tool. It is also currently unknown if VK4 format files
+# can store floating point numbers larger than 32 bits, and if so how this
+# tool may affect the precision of such numbers, although it is known to work
+# correctly with 32 bit floating points numbers.
+
+# As this tool is very young, it is possible there may be additional edge cases
+# which have not yet been properly accounted for.
+
+# **NOTE** the ``prefix_N_dim`` matrix values are not explicitly normalized to
+# meters, they will use whatever SI unit Gwyddion provides them in. In the
+# future, this will will normalize to meters, but in the interim you should
+# check the SI unit field in the JSON metadata file.
+
+# .SYNTAX
+
+# For usage information, run this command with the ``--help`` flag.
+
+# Tip: this tool is also useful for producing outlines of VK4 files. This can
+# be accomplished by running this program with the ``--verbose`` flag on an
+# input file without specifying an output file.
+
+# .CHANGELOG
+
+# * 0.0.1
+#
+#   * 2018-04-25 - Charles Daniels
+#
+#       * Create initial version.
+#
+# * 0.0.2
+#
+#   * 2018-04-26 - Charles Daniels
+#
+#       * Patch a bug where ``xres`` and ``yres`` were transposed while
+#         reshaping the Numpy matrix representing the image data, which
+#         resulted in corrupted ``.mat`` contents.
+#
+
+# .AUTHOR
+
+# Charles Daniels
+
+# .LICENSE
+
+# Copyright 2018 Charles Daniels
+
+#  Redistribution and use in source and binary forms, with or without
+#  modification, are permitted provided that the following conditions are met:
+
+#  1. Redistributions of source code must retain the above copyright notice,
+#  this list of conditions and the following disclaimer.
+
+#  2. Redistributions in binary form must reproduce the above copyright notice,
+#  this list of conditions and the following disclaimer in the documentation
+#  and/or other materials provided with the distribution.
+
+#  3. Neither the name of the copyright holder nor the names of its
+#  contributors may be used to endorse or promote products derived from this
+#  software without specific prior written permission.
+
+#  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+#  AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+#  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+#  ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+#  LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+#  CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+#  SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+#  INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+#  CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+#  ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+#  POSSIBILITY OF SUCH DAMAGE.
+
+# .ENDOC
+
+import sys
+import argparse
+import json
+import numpy
+import scipy.io
+import os
+
+__version__ = "0.0.2"
+
+try:
+    # Add your sys.path.append() to get Gwyddion into your Python Path here
+    # if you need to do so.
+    import gwy
+except ImportError:
+    sys.stderr.write("ERROR: failed to import Gwyddion. Maybe you need to ")
+    sys.stderr.write("configure your Python Path?")
+    sys.stderr.write("http://gwyddion.net/documentation/")
+    sys.stderr.write("user-guide-en/pygwy.html")
+    sys.stderr.write("\n")
+    sys.stderr.flush()
+    exit(1)
+
+show_verbose = False
+
+def verbose(msg):
+    global show_verbose
+    if show_verbose:
+        sys.stderr.write("{}\n".format(msg))
+        sys.stderr.flush()
+
+def load_vk4(filepath):
+    """load_vk4
+
+    Load a VK4 file and return it as a gwy.Container instance.
+
+    :param filepath: Input file path, must exist.
+    """
+    verbose("Loading file '{}'".format(filepath))
+    if not os.path.isfile(filepath):
+        sys.stderr.write("ERROR: no such file '{}'\n".format(filepath))
+        raise FileNotFoundError("no such file '{}'".format(filepath))
+
+    container = gwy.gwy_file_load(filepath, gwy.RUN_NONINTERACTIVE)
+    gwy.gwy_app_data_browser_add(container)
+
+    verbose("Finished loading input file.")
+
+    return container
+
+def extract_data(container, matrix_prefix):
+    """extract_data
+
+    Extract all matrix and metadata from a gwy.Container instance. Note that
+    this function may not be robust across all possible invariants of a
+    gwy.Container, it is designed against those resulting from loading VK4
+    files specifically.
+
+    The result is a tuple of the matrix hashtable and the metadata hashtable,
+    in that order.
+
+    :param container:
+    """
+
+    matrixdata = {}
+    metadata = {}
+    for k in container.keys_by_name():
+        verbose("{}".format(k))
+
+        # Parse out the hashtable key that corresponds to the current unit of
+        # interest.
+        path = [x for x in k.split('/') if x != ""]
+        dictkey = path[0]
+
+        data = container[k]
+
+        if dictkey not in metadata:
+            metadata[dictkey] = {}
+
+        verbose("\tdata is of type {}".format(type(data)))
+        verbose("\tpath is {}".format(path))
+
+        # This field is matrix data, convert it to a numpy array and store
+        # in matrix data
+        if type(data) is gwy.DataField:
+            # This is a 1-D array of floats.
+            raw_data = data.get_data()
+
+            verbose("\t\tDataField content type: {}".format(type(matrixdata)))
+            verbose("\t\tDataField content size: {}".format(len(matrixdata)))
+            verbose("\t\tDataField shape: {}, {}".format(data.get_xres(), data.get_yres()))
+            for i in range(3):
+                verbose("\t\t\t{}".format(raw_data[i]))
+            verbose("\t\t\t...")
+
+            # Reshape the matrix to 2D
+            arr = numpy.array(raw_data)
+            arr = arr.reshape((data.get_yres(), data.get_xres()))
+            matrixdata[matrix_prefix + "_" + dictkey] = arr
+
+            # Populate metadata fields from data field.
+            metadata[dictkey]['xres'] = data.get_xres()
+            metadata[dictkey]['yres'] = data .get_yres()
+            metadata[dictkey]['xreal'] = data.get_xreal()
+            metadata[dictkey]['yreal'] = data .get_yreal()
+            metadata[dictkey]['xoffset'] = data.get_xoffset()
+            metadata[dictkey]['yoffset'] = data .get_yoffset()
+            metadata[dictkey]['si_unit_xy'] = \
+                    data.get_si_unit_xy().get_string(gwy.SI_UNIT_FORMAT_PLAIN)
+            metadata[dictkey]['si_unit_z'] = \
+                    data.get_si_unit_z().get_string(gwy.SI_UNIT_FORMAT_PLAIN)
+            # (avg, ra, rms, skew, kurtosis)
+            metadata[dictkey]['stats'] = data .get_stats()
+
+            # Run curve fitting and subtract from data matrix. Use degree two
+            # for both row and col (quadratic fit).
+            coef = data.area_fit_polynom(
+                    0,                  # top-left col
+                    0,                  # top-left row
+                    data.get_xres(),    # width
+                    data.get_yres(),    # height
+                    2,                  # column degree
+                    2                   # row degree
+            )
+            verbose("\t\tdegree 2 fit coefficients: {}".format(coef))
+            data.subtract_polynom(2, 2, coef)
+
+            # Generate a new matrix and queue it for saving.
+            raw_data = data.get_data()
+            arr = numpy.array(raw_data)
+            arr = arr.reshape((data.get_yres(), data.get_xres()))
+            matrixdata[matrix_prefix + "_" + dictkey + "_fit"] = arr
+
+            # Save dimensions to another sub_matrix.
+
+            # TODO: should explicitly normalize to meters rather than relying
+            # on default behavior.
+            dimmatrix = numpy.array([data.get_xreal(), data.get_yreal()])
+            matrixdata[matrix_prefix + "_" + dictkey + "_dim"] = dimmatrix
+
+        # Case where the current field just contains string data (usually
+        # titles and similar).
+        elif type(data) is str:
+            verbose("\tdata: {}".format(data))
+            metadata[dictkey]['/'.join(path[1:])] = data
+
+        # Case where the current field is a nested container (usually
+        # contains metadata).
+        elif type(data) is gwy.Container:
+            verbose("\tcontainer keys & values:")
+            for item in data.keys_by_name():
+                verbose("\t\t{}: {}".format(item, data[item]))
+                metadata[path[0]][item] = data[item]
+
+    return (matrixdata, metadata)
+
+def main():
+
+    parser = argparse.ArgumentParser(description=__description__)
+
+    parser.add_argument("--input", "-i", required=True, help="Specify the" +
+                        " input file to read.")
+
+    parser.add_argument("--verbose", "-v", default=False, action="store_true")
+
+    parser.add_argument("--output", "-o", default=None, help="Specify " +
+                        "output basename (.mat and .json files will be " +
+                        "generated with this basename containing the matrix " +
+                        "data and metadata respectively). If this argument" +
+                        "is not specified, no output file will be saved. " +
+                        "If the relevant files exist already, they will be " +
+                        "overwritten.")
+
+    parser.add_argument("--matrix", "-m", default="matrix",
+                        help="Specify matrix prefix in MATLAB when" +
+                        " importing " +
+                        "the resulting .mat file. (default: matrix)")
+
+    parser.add_argument('--version', '-V', action='version',
+                        version="%(prog)s " + __version__)
+
+    args = parser.parse_args()
+
+    global show_verbose
+    show_verbose = args.verbose
+
+    container = load_vk4(args.input)
+    matrixdata, metadata = extract_data(container, args.matrix)
+
+    if args.output is not None:
+        matlabfile = args.output + ".mat"
+        jsonfile = args.output + "json"
+
+        for f in [matlabfile, jsonfile]:
+            if os.path.exists(f):
+                sys.stderr.write("WARNING: overwriting '{}'\n".format(f))
+
+        verbose("Writing output with basename '{}'... ".format(args.output))
+
+        scipy.io.savemat(args.output + ".mat", matrixdata)
+        with open(args.output + ".json", 'w') as fp:
+            json.dump(metadata, fp)
+
+if __name__ == "__main__":
+    main()
