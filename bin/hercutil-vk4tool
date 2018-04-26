@@ -5,7 +5,7 @@
 descr = """
 # A tool for interacting with Keyance Profilometry VK4 formatted data files,
 # built on top of Gwyddion's automation API. This tool is capable of importing
-# VK4 files, extracting the stored data, and producing both MatLab matrices
+# VK4 files, extracting the stored data, and producing both MATLAB matrices
 # containing the data and JSON formatted sidecar files containing metadata
 # about each.
 """
@@ -18,8 +18,8 @@ __description__ = descr.replace('# ', '')
 # --------
 
 # This tool was written to support analysis of VK4 formatted data files
-# programatically via existing tools such as MatLab/Octave as well as any other
-# tool which is capable of importing MatLab ``.mat`` format matrices (as well
+# programatically via existing tools such as MATLAB/Octave as well as any other
+# tool which is capable of importing MATLAB ``.mat`` format matrices (as well
 # as JSON, if metadata is required).
 
 # Gwyddion Paths
@@ -43,7 +43,7 @@ __description__ = descr.replace('# ', '')
 
 # The raw data of the VK4 file which is input is converted into one or more
 # 2-dimensional matrices and stuffed into a single ``.mat`` data file for later
-# import into MatLab (this is accomplished via ``scipy.io``). The matrix names
+# import into MATLAB (this is accomplished via ``scipy.io``). The matrix names
 # will be set to a prefix (by default ``matrix``, but this can be overridden
 # using a flag) followed by a ``_`` character and then the first part of the
 # key Gwyddion uses to refer to the matrix (this seems to typically be a
@@ -86,19 +86,19 @@ __description__ = descr.replace('# ', '')
 # floating point numbers, and it has the schema ``(avg, ra, rms, skew,
 # kurtosis)`` per the Gwyddion documentation.
 
-# Footnote on Loading JSON in Matlab
+# Footnote on Loading JSON in MATLAB
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 # JSON was selected as the format for the metadata sidecar files because of the
 # fact that there is an existing, open-source JSON parser available for
-# Matlab/Octave. In the form of JSONlab (https://github.com/fangq/jsonlab).
+# MATLAB/Octave. In the form of JSONlab (https://github.com/fangq/jsonlab).
 
 # Caveats
 # -------
 
 # Gwyddion's internal data structures are not terribly well documented, and
 # this represents a best-effort attempt to rip Gwyddion objects from it's data
-# model and generalize them into a readily import-able format. Some loss
+# model and generalize them into a readily importable format. Some loss
 # is inevitable, and in particular it is not yet clear if all required metadata
 # is preserved by this tool. It is also currently unknown if VK4 format files
 # can store floating point numbers larger than 32 bits, and if so how this
@@ -111,13 +111,13 @@ __description__ = descr.replace('# ', '')
 # **NOTE** the ``prefix_N_dim`` matrix values are not explicitly normalized to
 # meters, they will use whatever SI unit Gwyddion provides them in. In the
 # future, this will will normalize to meters, but in the interim you should
-# check the SI unit filed in the JSON metadata file.
+# check the SI unit field in the JSON metadata file.
 
 # .SYNTAX
 
 # For usage information, run this command with the ``--help`` flag.
 
-# Tip: this tool is also useful for producing outlines of vk4 files. This can
+# Tip: this tool is also useful for producing outlines of VK4 files. This can
 # be accomplished by running this program with the ``--verbose`` flag on an
 # input file without specifying an output file.
 
@@ -325,10 +325,10 @@ def main():
                         "data and metadata respectively). If this argument" +
                         "is not specified, no output file will be saved. " +
                         "If the relevant files exist already, they will be " +
-                        "over-written.")
+                        "overwritten.")
 
     parser.add_argument("--matrix", "-m", default="matrix",
-                        help="Specify matrix prefix in MatLab when" +
+                        help="Specify matrix prefix in MATLAB when" +
                         " importing " +
                         "the resulting .mat file. (default: matrix)")
 
