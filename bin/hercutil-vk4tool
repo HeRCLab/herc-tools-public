@@ -121,6 +121,23 @@ __description__ = descr.replace('# ', '')
 # be accomplished by running this program with the ``--verbose`` flag on an
 # input file without specifying an output file.
 
+# .CHANGELOG
+
+# * 0.0.1
+#
+#   * 2018-04-25 - Charles Daniels
+#
+#       * Create initial version.
+#
+# * 0.0.2
+#
+#   * 2018-04-26 - Charles Daniels
+#
+#       * Patch a bug where ``xres`` and ``yres`` were transposed while
+#         reshaping the Numpy matrix representing the image data, which
+#         resulted in corrupted ``.mat`` contents.
+#
+
 # .AUTHOR
 
 # Charles Daniels
@@ -163,6 +180,8 @@ import json
 import numpy
 import scipy.io
 import os
+
+__version__ = "0.0.2"
 
 try:
     # Add your sys.path.append() to get Gwyddion into your Python Path here
@@ -251,7 +270,7 @@ def extract_data(container, matrix_prefix):
 
             # Reshape the matrix to 2D
             arr = numpy.array(raw_data)
-            arr = arr.reshape((data.get_xres(), data.get_yres()))
+            arr = arr.reshape((data.get_yres(), data.get_xres()))
             matrixdata[matrix_prefix + "_" + dictkey] = arr
 
             # Populate metadata fields from data field.
@@ -284,7 +303,7 @@ def extract_data(container, matrix_prefix):
             # Generate a new matrix and queue it for saving.
             raw_data = data.get_data()
             arr = numpy.array(raw_data)
-            arr = arr.reshape((data.get_xres(), data.get_yres()))
+            arr = arr.reshape((data.get_yres(), data.get_xres()))
             matrixdata[matrix_prefix + "_" + dictkey + "_fit"] = arr
 
             # Save dimensions to another sub_matrix.
@@ -331,6 +350,9 @@ def main():
                         help="Specify matrix prefix in MATLAB when" +
                         " importing " +
                         "the resulting .mat file. (default: matrix)")
+
+    parser.add_argument('--version', '-V', action='version',
+                        version="%(prog)s " + __version__)
 
     args = parser.parse_args()
 
